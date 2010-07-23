@@ -35,157 +35,106 @@ Provide serialization and de-serialization of Google's protobuf Messages into/fr
 
 # groups are deprecated and not supported;
 # Note that preservation of unknown fields is currently not available for Python (c) google docs
+# extensions is not supported from 0.0.5 (due to gpb2.3 changes)
 
-__version__='0.0.4'
+__version__='0.0.5'
 __author__='Paul Dovbush <dpp@dpp.su>'
 
 
-
 import json	# py2.6+ TODO: add support for other JSON serialization modules
+from google.protobuf.descriptor import FieldDescriptor as FD
 
-from google.protobuf.descriptor import FieldDescriptor as _FieldDescriptor
 
 class ParseError(Exception): pass
 
-def _cast_json2pb(field, value, pb):
-	ftype = _TYPE_TO_DESERIALIZE_METHOD.get(field.type, None)
-	if ftype is not None:
-		return ftype(value)
-	raise NotImplementedError(ftype, field.type)
 
-def _get_repeated_json2pb(field, value, pb_value):
-	ftype = _TYPE_TO_DESERIALIZE_METHOD.get(field.type, None)
-	if ftype is not None:
-		pb_value.append(ftype(value))
-	else:
-		_json2pb(pb_value.add(), value)
-
-def _json2pb(pb, js):
+def json2pb(pb, js):
+	''' convert JSON string to google.protobuf.descriptor instance '''
 	for field in pb.DESCRIPTOR.fields:
-		try:
-			if not js.has_key(field.name):
-				continue
-			value = js[field.name]
-			if field.label == _FieldDescriptor.LABEL_REPEATED:
-				pb_value = getattr(pb, field.name, None)
-				for repeated_value in value:
-					_get_repeated_json2pb(field, repeated_value, pb_value)
-			else:
-				if field.message_type is not None:
-					_json2pb(getattr(pb, field.name, None), value)
+		if field.name not in js:
+			continue
+		if field.type == FD.TYPE_MESSAGE:
+			pass
+		elif field.type in _js2ftype:
+			ftype = _js2ftype[field.type]
+		else: 
+			raise ParseError("Field %s.%s of type '%d' is not supported" % (pb.__class__.__name__, field.name, field.type, ))
+		value = js[field.name]
+		if field.label == FD.LABEL_REPEATED:
+			pb_value = getattr(pb, field.name, None)
+			for v in value:
+				if field.type == FD.TYPE_MESSAGE:
+					json2pb(pb_value.add(), v)
 				else:
-					setattr(pb, field.name, _cast_json2pb(field, value, pb))
-		except:
-			raise ParseError(pb.__class__.__name__, field.name, js)
-	for field in pb.Extensions._known_extensions.values():
-		try:
-			if not js.has_key(field.name+':ext'):
-				continue
-			value = js[field.name+':ext']
-			if field.label == _FieldDescriptor.LABEL_REPEATED:
-				pb_value = pb.Extensions[field]
-				for repeated_value in value:
-					_get_repeated_json2pb(field, repeated_value, pb_value)
+					pb_value.append(ftype(v))
+		else:
+			if field.type == FD.TYPE_MESSAGE:
+				json2pb(getattr(pb, field.name, None), value)
 			else:
-				if field.message_type is not None:
-					_json2pb(pb.Extensions[field], value)
-				else:
-					pb.Extensions[field] = _cast_json2pb(field, value, pb)
-		except:
-			raise ParseError(pb.__class__.__name__, field.name, js)
+				setattr(pb, field.name, ftype(value))
 	return pb
 
 
 
-
-def _cast_pb2json(field, value):
-	ftype = _TYPE_TO_SERIALIZE_METHOD.get(field.type, None)
-	if ftype is not None:
-		return ftype(value)
-	raise NotImplementedError(ftype, field.type)
-
-def _get_repeated_pb2json(field, value):
-	ftype = _TYPE_TO_SERIALIZE_METHOD.get(field.type, None)
-	if ftype is not None:
-		return ftype(value)
-	else:
-		return _pb2json(value)
-
-def _pb2json(pb):
+def pb2json(pb):
+	''' convert google.protobuf.descriptor instance to JSON string '''
 	js = {}
 	# fields = pb.DESCRIPTOR.fields #all fields
 	fields = pb.ListFields()	#only filled (including extensions)
 	for field,value in fields:
-		try:
-			if field.label == _FieldDescriptor.LABEL_REPEATED:
-				js_value = []
-				for repeated_value in value:
-					js_value.append(_get_repeated_pb2json(field, repeated_value))
-			else:
-				if field.message_type is not None:
-					js_value = _pb2json(value)
-				else:
-					js_value = _cast_pb2json(field, value)
-			if field.is_extension:
-				js[field.name+':ext'] = js_value
-			else:
-				js[field.name] = js_value
-		except:
-			raise ParseError(pb.__class__.__name__, field.name, js)
+		if field.type == FD.TYPE_MESSAGE:
+			ftype = pb2json
+		elif field.type in _ftype2js:
+			ftype = _ftype2js[field.type]
+		else:
+			raise ParseError("Field %s.%s of type '%d' is not supported" % (pb.__class__.__name__, field.name, field.type, ))
+		if field.label == FD.LABEL_REPEATED:
+			js_value = []
+			for v in value:
+				js_value.append(ftype(v))
+		else:
+			js_value = ftype(value)
+		js[field.name] = js_value
 	return js
 
 
-_TYPE_TO_SERIALIZE_METHOD = {
-	_FieldDescriptor.TYPE_DOUBLE: float,
-	_FieldDescriptor.TYPE_FLOAT: float,
-	_FieldDescriptor.TYPE_INT64: long,
-	_FieldDescriptor.TYPE_UINT64: long,
-	_FieldDescriptor.TYPE_INT32: int,
-	_FieldDescriptor.TYPE_FIXED64: float,
-	_FieldDescriptor.TYPE_FIXED32: float,
-	_FieldDescriptor.TYPE_BOOL: bool,
-	_FieldDescriptor.TYPE_STRING: unicode,
-	_FieldDescriptor.TYPE_MESSAGE: _pb2json,
-	_FieldDescriptor.TYPE_BYTES: lambda x: x.encode('string_escape'),
-	_FieldDescriptor.TYPE_UINT32: int,
-	_FieldDescriptor.TYPE_ENUM: int,
-	_FieldDescriptor.TYPE_SFIXED32: float,
-	_FieldDescriptor.TYPE_SFIXED64: float,
-	_FieldDescriptor.TYPE_SINT32: int,
-	_FieldDescriptor.TYPE_SINT64: long,
+_ftype2js = {
+	FD.TYPE_DOUBLE: float,
+	FD.TYPE_FLOAT: float,
+	FD.TYPE_INT64: long,
+	FD.TYPE_UINT64: long,
+	FD.TYPE_INT32: int,
+	FD.TYPE_FIXED64: float,
+	FD.TYPE_FIXED32: float,
+	FD.TYPE_BOOL: bool,
+	FD.TYPE_STRING: unicode,
+	#FD.TYPE_MESSAGE: pb2json,		#handled specially
+	FD.TYPE_BYTES: lambda x: x.encode('string_escape'),
+	FD.TYPE_UINT32: int,
+	FD.TYPE_ENUM: int,
+	FD.TYPE_SFIXED32: float,
+	FD.TYPE_SFIXED64: float,
+	FD.TYPE_SINT32: int,
+	FD.TYPE_SINT64: long,
 }
 
-_TYPE_TO_DESERIALIZE_METHOD = {
-	_FieldDescriptor.TYPE_DOUBLE: float,
-	_FieldDescriptor.TYPE_FLOAT: float,
-	_FieldDescriptor.TYPE_INT64: long,
-	_FieldDescriptor.TYPE_UINT64: long,
-	_FieldDescriptor.TYPE_INT32: int,
-	_FieldDescriptor.TYPE_FIXED64: float,
-	_FieldDescriptor.TYPE_FIXED32: float,
-	_FieldDescriptor.TYPE_BOOL: bool,
-	_FieldDescriptor.TYPE_STRING: unicode,
-	# _FieldDescriptor.TYPE_MESSAGE: _json2pb,	#handled specially
-	_FieldDescriptor.TYPE_BYTES: lambda x: x.decode('string_escape'),
-	_FieldDescriptor.TYPE_UINT32: int,
-	_FieldDescriptor.TYPE_ENUM: int,
-	_FieldDescriptor.TYPE_SFIXED32: float,
-	_FieldDescriptor.TYPE_SFIXED64: float,
-	_FieldDescriptor.TYPE_SINT32: int,
-	_FieldDescriptor.TYPE_SINT64: long,
+_js2ftype = {
+	FD.TYPE_DOUBLE: float,
+	FD.TYPE_FLOAT: float,
+	FD.TYPE_INT64: long,
+	FD.TYPE_UINT64: long,
+	FD.TYPE_INT32: int,
+	FD.TYPE_FIXED64: float,
+	FD.TYPE_FIXED32: float,
+	FD.TYPE_BOOL: bool,
+	FD.TYPE_STRING: unicode,
+	# FD.TYPE_MESSAGE: json2pb,	#handled specially
+	FD.TYPE_BYTES: lambda x: x.decode('string_escape'),
+	FD.TYPE_UINT32: int,
+	FD.TYPE_ENUM: int,
+	FD.TYPE_SFIXED32: float,
+	FD.TYPE_SFIXED64: float,
+	FD.TYPE_SINT32: int,
+	FD.TYPE_SINT64: long,
 }
 
-
-def json2pb(pb_ctor, json_str):
-	''' convert JSON string to google.protobuf.descriptor instance '''
-	return _json2pb(pb_ctor(), json.loads(json_str))
-
-
-def pb2json(pb):
-	''' convert google.protobuf.descriptor instance to JSON string '''
-	return json.dumps(_pb2json(pb))
-
-
-
-if __name__ == '__main__':
-	from test import test
