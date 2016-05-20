@@ -13,7 +13,7 @@ Using .proto file like this:
    optional string email = 3;
  }
 ```
-You can encod and decode it to/from json:
+You can encode and decode it to/from json:
 ```json
  {
   "id": 123,
