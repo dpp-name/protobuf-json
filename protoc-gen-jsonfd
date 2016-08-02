@@ -1,0 +1,49 @@
+#!/usr/bin/env python
+
+# Convert FileDescriptorProto to JSON
+# protoc -I/usr/local/include/ -I. --plugin=protoc-gen-jsonfd --jsonfd_out=. test.proto
+
+import sys, json
+import google.protobuf.compiler.plugin_pb2 as plugin
+from google.protobuf.descriptor_pb2 import FileDescriptorProto
+from protobuf_json import pb2json, json2pb
+
+strip_source_code_info = True
+useFieldNumber = True
+
+def walk(node):
+    if isinstance(node, dict):
+        items = node.items()
+    elif isinstance(node, list):
+        items = enumerate(node)
+    else:
+        raise TypeError("Can't iterate over %s" % type(node))
+    for key, item in items:
+        if key == 'source_code_info':
+            del node[key]
+            continue
+        if isinstance(item, dict) or isinstance(item, list):
+            walk(item)
+        else:
+            pass;
+
+def convert(file_in):
+    out = pb2json(file_in)
+    if strip_source_code_info:
+        walk(out)
+    if useFieldNumber:
+        out = pb2json(json2pb(FileDescriptorProto(), out), useFieldNumber=useFieldNumber)
+    return json.dumps(out, separators=(',', ':'))
+
+data = sys.stdin.read()
+req = plugin.CodeGeneratorRequest()
+req.ParseFromString(data)
+response = plugin.CodeGeneratorResponse()
+for file_in in req.proto_file:
+    if file_in.package == 'google.protobuf':
+        continue
+    file_out = response.file.add()
+    file_out.name = "%s.json" % file_in.name[:-6]
+    file_out.content = convert(file_in)
+sys.stdout.write(response.SerializeToString())
+
